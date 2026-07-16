@@ -156,7 +156,7 @@
 <body>
 <header>
   <h1>現場調査チェックリスト</h1>
-  <p>株式会社ロジック向け・PWA版 v1</p>
+  <p>株式会社ロジック向け・PWA版 v3</p>
 </header>
 
 <main>
@@ -188,6 +188,23 @@
           <label for="address">現場住所</label>
           <input id="address" name="address" type="text">
         </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>会社ロゴ設定</h2>
+      <div class="photo-box">
+        <label for="companyLogoFile">株式会社ロジックのロゴ画像</label>
+        <input id="companyLogoFile" type="file" accept="image/png,image/jpeg,image/webp">
+        <div id="companyLogoPreview" class="photo-preview"></div>
+        <div class="buttons" style="margin:10px 0 0;">
+          <button type="button" class="primary" onclick="saveCompanyLogo()">ロゴを端末に登録</button>
+          <button type="button" class="danger" onclick="deleteCompanyLogo()">登録ロゴを削除</button>
+        </div>
+        <p class="small">
+          PNG・JPG・WebPに対応しています。背景が透明なPNGが最適です。
+          ロゴ未登録時は、報告書左上に「株式会社ロジック」と文字で表示します。
+        </p>
       </div>
     </section>
 
@@ -608,7 +625,8 @@
       <button type="button" class="primary" onclick="saveData()">端末に保存</button>
       <button type="button" class="secondary" onclick="loadData()">保存データを読込</button>
       <button type="button" class="ok" onclick="exportCSV()">CSVで出力</button>
-      <button type="button" class="secondary" onclick="window.print()">印刷・PDF保存</button>
+      <button type="button" class="ok" onclick="openCompactReport()">簡潔報告書（約2枚）</button>
+      <button type="button" class="secondary" onclick="window.print()">全項目を印刷</button>
       <button type="button" class="danger" onclick="clearForm()">入力内容を消去</button>
     </div>
   </form>
@@ -623,6 +641,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const d = document.getElementById('surveyDate');
   if (!d.value) d.value = new Date().toISOString().slice(0,10);
   loadData(false);
+  loadCompanyLogo();
 });
 
 
@@ -855,6 +874,212 @@ function exportCSV() {
   a.click();
   URL.revokeObjectURL(a.href);
   showStatus('CSVファイルを出力しました。');
+}
+
+
+
+const companyLogoInput = document.getElementById('companyLogoFile');
+const companyLogoPreview = document.getElementById('companyLogoPreview');
+
+companyLogoInput.addEventListener('change', async function() {
+  companyLogoPreview.innerHTML = '';
+  if (!this.files || !this.files.length) return;
+
+  const item = await fileToDataUrl(this.files[0]);
+  const img = document.createElement('img');
+  img.src = item.dataUrl;
+  img.alt = '株式会社ロジック ロゴ';
+  companyLogoPreview.appendChild(img);
+});
+
+async function saveCompanyLogo() {
+  try {
+    if (!companyLogoInput.files || !companyLogoInput.files.length) {
+      showStatus('登録するロゴ画像を選択してください。');
+      return;
+    }
+
+    const item = await fileToDataUrl(companyLogoInput.files[0]);
+    await dbPut('companyLogo', item);
+    renderCompanyLogo(item);
+    showStatus('会社ロゴを端末に登録しました。');
+  } catch (error) {
+    console.error(error);
+    showStatus('ロゴを登録できませんでした。');
+  }
+}
+
+async function loadCompanyLogo() {
+  try {
+    const item = await dbGet('companyLogo');
+    if (item) renderCompanyLogo(item);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function renderCompanyLogo(item) {
+  companyLogoPreview.innerHTML = '';
+  if (!item || !item.dataUrl) return;
+
+  const img = document.createElement('img');
+  img.src = item.dataUrl;
+  img.alt = '株式会社ロジック ロゴ';
+  companyLogoPreview.appendChild(img);
+}
+
+async function deleteCompanyLogo() {
+  if (!confirm('登録済みの会社ロゴを削除しますか？')) return;
+  await dbDelete('companyLogo');
+  companyLogoInput.value = '';
+  companyLogoPreview.innerHTML = '';
+  showStatus('登録ロゴを削除しました。');
+}
+
+async function openCompactReport() {
+  showStatus('簡潔報告書を作成中です…');
+  const companyLogo = await dbGet('companyLogo');
+
+  const ignored = new Set(['', '未確認', '未撮影', '該当なし', 'なし・未確認', '選択してください']);
+  const sections = [];
+
+  document.querySelectorAll('#surveyForm > section').forEach(section => {
+    const h2 = section.querySelector('h2');
+    if (!h2 || h2.textContent.trim() === '写真') return;
+
+    const rows = [];
+    const used = new Set();
+
+    section.querySelectorAll('input, select, textarea').forEach(el => {
+      if (!el.name || used.has(el.name) || el.type === 'file' || el.type === 'button') return;
+      used.add(el.name);
+
+      let label = el.name;
+      if (el.id) {
+        const lab = document.querySelector(`label[for="${el.id}"]`);
+        if (lab) label = lab.textContent.trim();
+      }
+      const item = el.closest('.check-item');
+      if (item && item.querySelector('span')) label = item.querySelector('span').textContent.trim();
+
+      if (el.type === 'checkbox') {
+        if (el.checked) rows.push([label, '該当・確認済']);
+      } else {
+        const value = String(el.value || '').trim();
+        if (!ignored.has(value)) rows.push([label, value]);
+      }
+    });
+
+    if (rows.length) sections.push([h2.textContent.trim(), rows]);
+  });
+
+  const photoNames = {
+    photo_overview_files:'現場全景',
+    photo_access_files:'搬入・搬出経路',
+    photo_parking_files:'駐車場所・車両進入口',
+    photo_ceiling_files:'天井・天井裏',
+    photo_wall_files:'壁・開口部',
+    photo_floor_files:'床・床下',
+    photo_electrical_files:'照明・電気設備',
+    photo_plumbing_files:'配管・衛生設備',
+    photo_damage_files:'既存不良・損傷箇所',
+    photo_measurement_files:'寸法確認写真'
+  };
+
+  const photos = [];
+  for (const [inputId] of photoInputs) {
+    if (photos.length >= 6) break;
+    const input = document.getElementById(inputId);
+    let list = [];
+    if (input && input.files && input.files.length) {
+      list = await Promise.all([...input.files].map(fileToDataUrl));
+    } else {
+      list = (await dbGet('photos:' + inputId)) || [];
+    }
+    if (list.length) photos.push([photoNames[inputId] || '写真', list[0].dataUrl]);
+  }
+
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+  const site = document.getElementById('siteName').value.trim() || '現場調査報告書';
+  const date = document.getElementById('surveyDate').value || '';
+  const staff = document.getElementById('staff').value.trim() || '';
+
+  let body = '';
+  for (const [title, rows] of sections) {
+    body += `<section><h2>${esc(title)}</h2>`;
+    for (const [label, value] of rows) {
+      body += `<div class="row"><div class="label">${esc(label)}</div><div class="value">${esc(value).replace(/\n/g,'<br>')}</div></div>`;
+    }
+    body += `</section>`;
+  }
+
+  let photoHtml = '';
+  if (photos.length) {
+    photoHtml = '<section class="photos"><h2>現場写真（代表写真）</h2><div class="photo-grid">';
+    for (const [title, src] of photos) {
+      photoHtml += `<figure><img src="${src}"><figcaption>${esc(title)}</figcaption></figure>`;
+    }
+    photoHtml += '</div></section>';
+  }
+
+
+  const companyBrandHtml = companyLogo && companyLogo.dataUrl
+    ? `<img class="company-logo" src="${companyLogo.dataUrl}" alt="株式会社ロジック">`
+    : `<div class="company-text-logo"><span>株式会社</span><strong>ロジック</strong></div>`;
+
+  const w = window.open('', '_blank');
+  if (!w) {
+    showStatus('ポップアップを許可してください。');
+    return;
+  }
+
+  w.document.write(`<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<title>${esc(site)}_現場調査報告書</title>
+<style>
+@page{size:A4 portrait;margin:8mm}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif;font-size:8.6pt;line-height:1.25;color:#111}
+.toolbar{position:sticky;top:0;background:#1f2937;padding:8px;display:flex;gap:8px;z-index:10}
+.toolbar button{border:0;border-radius:6px;padding:9px 13px;font-weight:700}
+.print{background:#2563eb;color:#fff}.close{background:#fff}
+header{border-bottom:2px solid #111;padding-bottom:4px;margin-bottom:5px}
+.header-top{display:grid;grid-template-columns:46mm 1fr 46mm;align-items:center;min-height:17mm;margin-bottom:3px}
+.company-brand{display:flex;align-items:center;justify-content:flex-start;height:16mm}
+.company-logo{display:block;max-width:44mm;max-height:15mm;object-fit:contain;object-position:left center}
+.company-text-logo{line-height:1.05;white-space:nowrap}
+.company-text-logo span{display:block;font-size:7pt;letter-spacing:.15em}
+.company-text-logo strong{font-size:17pt;letter-spacing:.08em}
+.report-title{text-align:center;font-size:16pt;font-weight:700}
+.report-number{text-align:right;font-size:8pt;color:#444}
+h1{font-size:16pt;margin:0 0 3px}.meta{display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.columns{column-count:2;column-gap:6mm}
+section{break-inside:avoid;border:1px solid #999;margin:0 0 4px}
+h2{font-size:9.5pt;margin:0;padding:3px 5px;background:#e5e7eb;border-bottom:1px solid #999}
+.row{display:grid;grid-template-columns:43% 57%;border-bottom:1px solid #ddd;min-height:18px}
+.row:last-child{border-bottom:0}.label{font-weight:600;background:#f8fafc;border-right:1px solid #ddd;padding:2px 4px}.value{padding:2px 4px;overflow-wrap:anywhere}
+.photos{margin-top:5px}.photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2.5mm;padding:2.5mm}
+figure{margin:0;break-inside:avoid}figure img{width:100%;height:39mm;object-fit:cover;border:1px solid #aaa}figcaption{text-align:center;font-size:7.5pt;margin-top:1mm}
+.note{font-size:7pt;color:#555;margin-top:3px}
+@media print{.toolbar{display:none!important}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+@media screen and (max-width:700px){.columns{column-count:1}.photo-grid{grid-template-columns:repeat(2,1fr)}}
+</style></head><body>
+<div class="toolbar"><button class="print" onclick="window.print()">PDF保存・印刷</button><button class="close" onclick="window.close()">閉じる</button></div>
+<header>
+<div class="header-top">
+  <div class="company-brand">${companyBrandHtml}</div>
+  <div class="report-title">現場調査報告書</div>
+  <div class="report-number">株式会社ロジック</div>
+</div>
+<div class="meta">
+<div><b>工事件名：</b>${esc(site)}</div><div><b>現調日：</b>${esc(date)}</div>
+<div><b>担当者：</b>${esc(staff)}</div><div><b>作成日時：</b>${esc(new Date().toLocaleString('ja-JP'))}</div>
+</div></header>
+<div class="columns">${body || '<p>入力済み項目はありません。</p>'}</div>
+${photoHtml}
+<p class="note">未入力・未確認項目は省略。写真は各分類の代表1枚、最大6枚を掲載しています。</p>
+</body></html>`);
+  w.document.close();
+  showStatus('簡潔報告書を表示しました。');
 }
 
 // PWA installation
